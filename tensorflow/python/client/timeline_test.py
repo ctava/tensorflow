@@ -69,7 +69,7 @@ class TimelineTest(test.TestCase):
     self.assertTrue(run_metadata.HasField('step_stats'))
     step_stats = run_metadata.step_stats
     devices = [d.device for d in step_stats.dev_stats]
-    self.assertTrue('/job:localhost/replica:0/task:0/cpu:0' in devices)
+    self.assertTrue('/job:localhost/replica:0/task:0/device:CPU:0' in devices)
     tl = timeline.Timeline(step_stats)
     ctf = tl.generate_chrome_trace_format()
     self._validateTrace(ctf)
@@ -155,9 +155,12 @@ class TimelineTest(test.TestCase):
     ctf = step_analysis.chrome_trace.format_to_string()
     self._validateTrace(ctf)
     maximums = step_analysis.allocator_maximums
-    self.assertTrue('cpu' in maximums)
+    cpuname = 'cpu'
+    if 'mklcpu' in maximums:
+      cpuname = 'mkl' + cpuname
+    self.assertTrue(cpuname in maximums)
     cpu_max = maximums[
-        'cuda_host_bfc'] if 'cuda_host_bfc' in maximums else maximums['cpu']
+        'cuda_host_bfc'] if 'cuda_host_bfc' in maximums else maximums[cpuname]
     # At least num1 + num2, both float32s (4 bytes each)
     self.assertGreater(cpu_max.num_bytes, 8)
     self.assertGreater(cpu_max.timestamp, 0)
@@ -181,9 +184,9 @@ class TimelineTest(test.TestCase):
     self.assertTrue(run_metadata.HasField('step_stats'))
     step_stats = run_metadata.step_stats
     devices = [d.device for d in step_stats.dev_stats]
-    self.assertTrue('/job:localhost/replica:0/task:0/cpu:0' in devices)
-    self.assertTrue('/job:localhost/replica:0/task:0/cpu:1' in devices)
-    self.assertTrue('/job:localhost/replica:0/task:0/cpu:2' in devices)
+    self.assertTrue('/job:localhost/replica:0/task:0/device:CPU:0' in devices)
+    self.assertTrue('/job:localhost/replica:0/task:0/device:CPU:1' in devices)
+    self.assertTrue('/job:localhost/replica:0/task:0/device:CPU:2' in devices)
     tl = timeline.Timeline(step_stats)
     ctf = tl.generate_chrome_trace_format()
     self._validateTrace(ctf)

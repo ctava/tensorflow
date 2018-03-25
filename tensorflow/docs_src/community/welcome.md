@@ -12,7 +12,6 @@ The source code for TensorFlow is on
 Before contributing to TensorFlow source code, please review the
 [Contribution guidelines](https://github.com/tensorflow/tensorflow/blob/master/CONTRIBUTING.md).
 
-
 ### Projects developed by the TensorFlow community
 
 The TensorFlow community has created many great projects around TensorFlow, including:
@@ -20,7 +19,6 @@ The TensorFlow community has created many great projects around TensorFlow, incl
 * [Machine Learning with TensorFlow (Book & Code)](http://tensorflowbook.com)
 * [@jtoy's awesome "Awesome TensorFlow" list of awesome things](https://github.com/jtoy/awesome-tensorflow)
 * [TensorFlow tutorials](https://github.com/pkmital/tensorflow_tutorials)
-* [Scikit Flow - Simplified Interface for TensorFlow](https://github.com/tensorflow/tensorflow/tree/master/tensorflow/contrib/learn/python/learn)
 * [Caffe to TensorFlow model converter](https://github.com/ethereon/caffe-tensorflow)
 * [Bitfusion's` GPU-enabled AWS EC2 TensorFlow AMI](https://github.com/bitfusionio/amis/tree/master/awsmrkt-bfboost-ubuntu14-cuda75-tensorflow) ([Launch AMI](https://aws.amazon.com/marketplace/pp/B01EYKBEQ0))
 * [Rust language bindings](https://github.com/google/tensorflow-rust)
@@ -29,6 +27,7 @@ The TensorFlow community has created many great projects around TensorFlow, incl
 * [Sublime Tensorflow - A plugin for Sublime Text](https://github.com/baptisteArnaud/Sublime-Tensorflow)
 * [Edward - A library for probabilistic modeling, inference, and criticism](http://edwardlib.org) ([Github](https://github.com/blei-lab/edward), [Forum](https://discourse.edwardlib.org))
 * [GPflow - Gaussian processes in TensorFlow](https://github.com/GPflow/GPflow)
+* [CS 20SI: Tensorflow for Deep Learning Research](https://web.stanford.edu/class/cs20si/) - Please note, this course was designed with TensorFlow v0.12, so some of the notes may be out of date - but it's still a great resource.
 
 ## TensorFlow Communities Around the World
 
@@ -52,6 +51,8 @@ Europe:
 TensorFlow provides multiple communication paths.  To pick the right path,
 please read the following list carefully:
 
+  * For new release announcements and security updates, subscribe to
+    [announce@tensorflow.org](https://groups.google.com/a/tensorflow.org/forum/#!forum/announce).
   * To ask or answer technical questions about TensorFlow, use
     [Stack Overflow](https://stackoverflow.com/questions/tagged/tensorflow).
     For example, ask or search Stack Overflow about a particular error message
@@ -65,5 +66,6 @@ please read the following list carefully:
     [TensorFlow issues tracker](https://github.com/tensorflow/tensorflow/issues)
     on GitHub.  For example, use the issue tracker to request a
     new operation in TensorFlow.
-    
+  * To report vulnerabilities, please follow our
+    [vulnerability disclosure guidelines](https://github.com/tensorflow/tensorflow/blob/master/SECURITY.md).
 

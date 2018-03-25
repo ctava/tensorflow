@@ -23,6 +23,7 @@ import tarfile
 import tempfile
 
 import numpy as np
+from scipy import linalg as scp_linalg
 
 from google.protobuf import text_format
 
@@ -49,14 +50,24 @@ def _expected_inception_score(logits):
   return np.exp(np.mean(per_example_logincscore))
 
 
-def _approximate_matrix_sqrt(mat, eps=1e-8):
-  # Unlike tensorflow, numpy's return order is (u, s, v)
-  u, s, v = np.linalg.svd(mat)
-  si = np.where(s < eps, s, np.sqrt(s))
-  # Note the "v" returned by numpy is actually v = V^T
-  # (when referencing the SVD equation A = U S V^T)
-  # This is unlike Tensorflow which returns v = V
-  return np.dot(np.dot(u, np.diag(si)), v)
+def _expected_mean_only_fid(real_imgs, gen_imgs):
+  m = np.mean(real_imgs, axis=0)
+  m_v = np.mean(gen_imgs, axis=0)
+  mean = np.square(m - m_v).sum()
+  mofid = mean
+  return mofid
+
+
+def _expected_diagonal_only_fid(real_imgs, gen_imgs):
+  m = np.mean(real_imgs, axis=0)
+  m_v = np.mean(gen_imgs, axis=0)
+  var = np.var(real_imgs, axis=0)
+  var_v = np.var(gen_imgs, axis=0)
+  sqcc = np.sqrt(var * var_v)
+  mean = (np.square(m - m_v)).sum()
+  trace = (var + var_v - 2 * sqcc).sum()
+  dofid = mean + trace
+  return dofid
 
 
 def _expected_fid(real_imgs, gen_imgs):
@@ -64,17 +75,20 @@ def _expected_fid(real_imgs, gen_imgs):
   m_v = np.mean(gen_imgs, axis=0)
   sigma = np.cov(real_imgs, rowvar=False)
   sigma_v = np.cov(gen_imgs, rowvar=False)
-  sqcc = _approximate_matrix_sqrt(np.dot(sigma, sigma_v))
+  sqcc = scp_linalg.sqrtm(np.dot(sigma, sigma_v))
   mean = np.square(m - m_v).sum()
   trace = np.trace(sigma + sigma_v - 2 * sqcc)
   fid = mean + trace
   return fid
 
 
+def _expected_trace_sqrt_product(sigma, sigma_v):
+  return np.trace(scp_linalg.sqrtm(np.dot(sigma, sigma_v)))
+
 # A dummy GraphDef string with the minimum number of Ops.
 graphdef_string = """
 node {
-  name: "inputs"
+  name: "Mul"
   op: "Placeholder"
   attr {
     key: "dtype"
@@ -103,7 +117,7 @@ node {
   }
 }
 node {
-  name: "InceptionV3/Logits/SpatialSqueeze"
+  name: "logits"
   op: "Placeholder"
   attr {
     key: "dtype"
@@ -126,7 +140,7 @@ node {
   }
 }
 node {
-  name: "InceptionV3/Logits/AvgPool_1a_8x8/AvgPool"
+  name: "pool_3"
   op: "Placeholder"
   attr {
     key: "dtype"
@@ -187,8 +201,9 @@ class ClassifierMetricsTest(test.TestCase):
     batch_size = 3
     img = array_ops.ones([batch_size, 299, 299, 3])
     pool = _run_with_mock(
-        classifier_metrics.run_inception, img,
-        output_tensor=classifier_metrics.INCEPTION_V3_FINAL_POOL)
+        classifier_metrics.run_inception,
+        img,
+        output_tensor=classifier_metrics.INCEPTION_FINAL_POOL)
 
     self.assertTrue(isinstance(pool, ops.Tensor))
     pool.shape.assert_is_compatible_with([batch_size, 2048])
@@ -196,10 +211,32 @@ class ClassifierMetricsTest(test.TestCase):
     # Check that none of the model variables are trainable.
     self.assertListEqual([], variables.trainable_variables())
 
+  def test_run_inception_multiple_outputs(self):
+    """Test `run_inception` graph construction with multiple outputs."""
+    batch_size = 3
+    img = array_ops.ones([batch_size, 299, 299, 3])
+    logits, pool = _run_with_mock(
+        classifier_metrics.run_inception,
+        img,
+        output_tensor=[
+            classifier_metrics.INCEPTION_OUTPUT,
+            classifier_metrics.INCEPTION_FINAL_POOL
+        ])
+
+    self.assertTrue(isinstance(logits, ops.Tensor))
+    self.assertTrue(isinstance(pool, ops.Tensor))
+    logits.shape.assert_is_compatible_with([batch_size, 1001])
+    pool.shape.assert_is_compatible_with([batch_size, 2048])
+
+    # Check that none of the model variables are trainable.
+    self.assertListEqual([], variables.trainable_variables())
+
   def test_inception_score_graph(self):
     """Test `inception_score` graph construction."""
-    score = _run_with_mock(classifier_metrics.inception_score,
-                           array_ops.zeros([6, 299, 299, 3]), num_batches=3)
+    score = _run_with_mock(
+        classifier_metrics.inception_score,
+        array_ops.zeros([6, 299, 299, 3]),
+        num_batches=3)
     self.assertTrue(isinstance(score, ops.Tensor))
     score.shape.assert_has_rank(0)
 
@@ -237,12 +274,14 @@ class ClassifierMetricsTest(test.TestCase):
           array_ops.zeros([8, 10], dtype=dtypes.int32), p_logits, q)
 
     with self.assertRaisesRegexp(ValueError, 'must be floating type'):
-      classifier_metrics._kl_divergence(
-          p, array_ops.zeros([8, 10], dtype=dtypes.int32), q)
+      classifier_metrics._kl_divergence(p,
+                                        array_ops.zeros(
+                                            [8, 10], dtype=dtypes.int32), q)
 
     with self.assertRaisesRegexp(ValueError, 'must be floating type'):
-      classifier_metrics._kl_divergence(
-          p, p_logits, array_ops.zeros([10], dtype=dtypes.int32))
+      classifier_metrics._kl_divergence(p, p_logits,
+                                        array_ops.zeros(
+                                            [10], dtype=dtypes.int32))
 
     with self.assertRaisesRegexp(ValueError, 'must have rank 2'):
       classifier_metrics._kl_divergence(array_ops.zeros([8]), p_logits, q)
@@ -255,8 +294,9 @@ class ClassifierMetricsTest(test.TestCase):
 
   def test_inception_score_value(self):
     """Test that `inception_score` gives the correct value."""
-    logits = np.array([np.array([1, 2] * 500 + [4]),
-                       np.array([4, 5] * 500 + [6])])
+    logits = np.array(
+        [np.array([1, 2] * 500 + [4]),
+         np.array([4, 5] * 500 + [6])])
     unused_image = array_ops.zeros([2, 299, 299, 3])
     incscore = _run_with_mock(classifier_metrics.inception_score, unused_image)
 
@@ -265,28 +305,123 @@ class ClassifierMetricsTest(test.TestCase):
 
     self.assertAllClose(_expected_inception_score(logits), incscore_np)
 
+  def test_mean_only_frechet_classifier_distance_value(self):
+    """Test that `frechet_classifier_distance` gives the correct value."""
+    np.random.seed(0)
+
+    pool_real_a = np.float32(np.random.randn(256, 2048))
+    pool_gen_a = np.float32(np.random.randn(256, 2048))
+
+    tf_pool_real_a = array_ops.constant(pool_real_a)
+    tf_pool_gen_a = array_ops.constant(pool_gen_a)
+
+    mofid_op = classifier_metrics.mean_only_frechet_classifier_distance_from_activations(  # pylint: disable=line-too-long
+        tf_pool_real_a, tf_pool_gen_a)
+
+    with self.test_session() as sess:
+      actual_mofid = sess.run(mofid_op)
+
+    expected_mofid = _expected_mean_only_fid(pool_real_a, pool_gen_a)
+
+    self.assertAllClose(expected_mofid, actual_mofid, 0.0001)
+
+  def test_diagonal_only_frechet_classifier_distance_value(self):
+    """Test that `frechet_classifier_distance` gives the correct value."""
+    np.random.seed(0)
+
+    pool_real_a = np.float32(np.random.randn(256, 2048))
+    pool_gen_a = np.float32(np.random.randn(256, 2048))
+
+    tf_pool_real_a = array_ops.constant(pool_real_a)
+    tf_pool_gen_a = array_ops.constant(pool_gen_a)
+
+    dofid_op = classifier_metrics.diagonal_only_frechet_classifier_distance_from_activations(  # pylint: disable=line-too-long
+        tf_pool_real_a, tf_pool_gen_a)
+
+    with self.test_session() as sess:
+      actual_dofid = sess.run(dofid_op)
+
+    expected_dofid = _expected_diagonal_only_fid(pool_real_a, pool_gen_a)
+
+    self.assertAllClose(expected_dofid, actual_dofid, 0.0001)
+
   def test_frechet_classifier_distance_value(self):
     """Test that `frechet_classifier_distance` gives the correct value."""
     np.random.seed(0)
-    test_pool_real_a = np.float32(np.random.randn(64, 256))
-    test_pool_gen_a = np.float32(np.random.randn(64, 256))
 
-    fid_op = _run_with_mock(classifier_metrics.frechet_classifier_distance,
-                            test_pool_real_a, test_pool_gen_a,
-                            classifier_fn=lambda x: x)
+    # Make num_examples > num_features to ensure scipy's sqrtm function
+    # doesn't return a complex matrix.
+    test_pool_real_a = np.float32(np.random.randn(512, 256))
+    test_pool_gen_a = np.float32(np.random.randn(512, 256))
+
+    fid_op = _run_with_mock(
+        classifier_metrics.frechet_classifier_distance,
+        test_pool_real_a,
+        test_pool_gen_a,
+        classifier_fn=lambda x: x)
 
     with self.test_session() as sess:
       actual_fid = sess.run(fid_op)
 
     expected_fid = _expected_fid(test_pool_real_a, test_pool_gen_a)
 
-    self.assertAllClose(expected_fid, actual_fid, 0.01)
+    self.assertAllClose(expected_fid, actual_fid, 0.0001)
+
+  def test_frechet_classifier_distance_covariance(self):
+    """Test that `frechet_classifier_distance` takes covariance into account."""
+    np.random.seed(0)
+
+    # Make num_examples > num_features to ensure scipy's sqrtm function
+    # doesn't return a complex matrix.
+    test_pool_reals, test_pool_gens = [], []
+    for i in range(1, 11, 2):
+      test_pool_reals.append(np.float32(np.random.randn(2048, 256) * i))
+      test_pool_gens.append(np.float32(np.random.randn(2048, 256) * i))
+
+    fid_ops = []
+    for i in range(len(test_pool_reals)):
+      fid_ops.append(_run_with_mock(
+          classifier_metrics.frechet_classifier_distance,
+          test_pool_reals[i],
+          test_pool_gens[i],
+          classifier_fn=lambda x: x))
+
+    fids = []
+    with self.test_session() as sess:
+      for fid_op in fid_ops:
+        fids.append(sess.run(fid_op))
+
+    # Check that the FIDs increase monotonically.
+    self.assertTrue(all(fid_a < fid_b for fid_a, fid_b in zip(fids, fids[1:])))
+
+  def test_trace_sqrt_product_value(self):
+    """Test that `trace_sqrt_product` gives the correct value."""
+    np.random.seed(0)
+
+    # Make num_examples > num_features to ensure scipy's sqrtm function
+    # doesn't return a complex matrix.
+    test_pool_real_a = np.float32(np.random.randn(512, 256))
+    test_pool_gen_a = np.float32(np.random.randn(512, 256))
+
+    cov_real = np.cov(test_pool_real_a, rowvar=False)
+    cov_gen = np.cov(test_pool_gen_a, rowvar=False)
+
+    trace_sqrt_prod_op = _run_with_mock(classifier_metrics.trace_sqrt_product,
+                                        cov_real, cov_gen)
+
+    with self.test_session() as sess:
+      # trace_sqrt_product: tsp
+      actual_tsp = sess.run(trace_sqrt_prod_op)
+
+    expected_tsp = _expected_trace_sqrt_product(cov_real, cov_gen)
+
+    self.assertAllClose(actual_tsp, expected_tsp, 0.01)
 
   def test_preprocess_image_graph(self):
     """Test `preprocess_image` graph construction."""
     incorrectly_sized_image = array_ops.zeros([520, 240, 3])
     correct_image = classifier_metrics.preprocess_image(
-        image=incorrectly_sized_image)
+        images=incorrectly_sized_image)
     _run_with_mock(classifier_metrics.run_inception,
                    array_ops.expand_dims(correct_image, 0))
 

@@ -11,6 +11,8 @@ exports_files([
     "API_UPDATE_WARNING.txt",
 ])
 
+load("//tensorflow:tensorflow.bzl", "tf_cc_binary")
+
 py_test(
     name = "api_compatibility_test",
     srcs = ["api_compatibility_test.py"],
@@ -21,6 +23,7 @@ py_test(
     ],
     srcs_version = "PY2AND3",
     deps = [
+        "//tensorflow:experimental_tensorflow_py",
         "//tensorflow:tensorflow_py",
         "//tensorflow/python:client_testlib",
         "//tensorflow/python:lib",
@@ -28,6 +31,15 @@ py_test(
         "//tensorflow/tools/api/lib:python_object_to_proto_visitor",
         "//tensorflow/tools/common:public_api",
         "//tensorflow/tools/common:traverse",
+    ],
+)
+
+tf_cc_binary(
+    name = "convert_from_multiline",
+    srcs = ["convert_from_multiline.cc"],
+    deps = [
+        "//tensorflow/core:lib",
+        "//tensorflow/core:op_gen_lib",
     ],
 )
 

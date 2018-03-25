@@ -19,6 +19,7 @@ limitations under the License.
 #include <unordered_set>
 
 #include "tensorflow/compiler/jit/defs.h"
+#include "tensorflow/compiler/jit/xla_compile_on_demand_op.h"
 #include "tensorflow/compiler/jit/xla_device_context.h"
 #include "tensorflow/compiler/jit/xla_device_ops.h"
 #include "tensorflow/compiler/tf2xla/dump_graph.h"
@@ -28,6 +29,7 @@ limitations under the License.
 #include "tensorflow/core/common_runtime/device_factory.h"
 #include "tensorflow/core/common_runtime/dma_helper.h"
 #include "tensorflow/core/common_runtime/function.h"
+#include "tensorflow/core/common_runtime/renamed_device.h"
 #include "tensorflow/core/framework/allocator.h"
 #include "tensorflow/core/framework/device_base.h"
 #include "tensorflow/core/framework/function.h"
@@ -107,17 +109,14 @@ XlaDeviceAllocator* XlaDeviceAllocatorState::GetOrCreateXlaDeviceAllocator(
 /* static */ Status XlaDevice::Create(
     const string& platform_name, const string& device_name, int device_ordinal,
     const string& jit_device_name, const SessionOptions& options,
-    const string& name_prefix, std::unique_ptr<XlaDevice>* device) {
+    const string& name_prefix,
+    const XlaOpRegistry::DeviceRegistration& registration,
+    bool transfer_as_literal, std::unique_ptr<XlaDevice>* device) {
   VLOG(1) << "XlaDevice::Create " << platform_name << " " << device_name << ":"
           << device_ordinal;
 
   // These are no-ops if they have already been done previously for
   // this device_name/compilation_device_name pair.
-  XlaOpRegistry::DeviceRegistration registration;
-  registration.compilation_device_name = jit_device_name;
-  registration.requires_compilation = true;
-  registration.enable_jit_by_default = false;
-  registration.compile_resource_ops = true;
   XlaOpRegistry::RegisterCompilationDevice(device_name, registration);
 
   auto platform = se::MultiPlatformManager::PlatformWithName(platform_name);
@@ -133,15 +132,17 @@ XlaDeviceAllocator* XlaDeviceAllocatorState::GetOrCreateXlaDeviceAllocator(
 
   device->reset(new XlaDevice(options, attrs, device_ordinal,
                               DeviceType(jit_device_name),
-                              platform.ValueOrDie()));
+                              platform.ValueOrDie(), transfer_as_literal));
   return Status::OK();
 }
 
-XlaDevice::Metadata::Metadata(int device_ordinal, se::Platform* platform,
-                              const DeviceType& device_type)
+XlaDevice::Metadata::Metadata(
+    int device_ordinal, se::Platform* platform, const DeviceType& device_type,
+    std::unique_ptr<XlaTensorInfoManager>* tensor_info_manager)
     : device_ordinal_(device_ordinal),
       device_type_(device_type),
-      platform_(platform) {}
+      platform_(platform),
+      tensor_info_manager_(*tensor_info_manager) {}
 
 int XlaDevice::Metadata::device_ordinal() const { return device_ordinal_; }
 
@@ -156,9 +157,14 @@ const DeviceType& XlaDevice::Metadata::jit_device_type() const {
   return device_type_;
 }
 
+XlaTensorInfoManager& XlaDevice::Metadata::tensor_info_manager() const {
+  return *tensor_info_manager_;
+}
+
 /* static */ Status XlaDevice::GetMetadata(OpKernelContext* ctx,
                                            const Metadata** metadata) {
-  XlaDevice* xla_device = dynamic_cast<XlaDevice*>(ctx->device());
+  XlaDevice* xla_device =
+      dynamic_cast<XlaDevice*>(ctx->device()->UnderlyingDevice());
   if (xla_device == nullptr) {
     return errors::Internal(
         "Cannot get XLA metadata from non-XLA device \"", ctx->device()->name(),
@@ -172,13 +178,19 @@ const DeviceType& XlaDevice::Metadata::jit_device_type() const {
 
 XlaDevice::XlaDevice(const SessionOptions& options,
                      const DeviceAttributes& attrs, int device_ordinal,
-                     const DeviceType& jit_device_name, se::Platform* platform)
+                     const DeviceType& jit_device_name, se::Platform* platform,
+                     bool transfer_as_literal)
     : LocalDevice(options, attrs),
-      xla_metadata_(device_ordinal, platform, jit_device_name),
+      xla_metadata_(
+          device_ordinal, platform, jit_device_name,
+          // Pass tensor_info_manager_ by reference as it is initialized lazily.
+          &tensor_info_manager_),
       device_ordinal_(device_ordinal),
       jit_device_name_(jit_device_name),
       xla_allocator_(nullptr),
-      platform_(platform) {}
+      platform_(platform),
+      tensor_info_manager_(nullptr),
+      transfer_as_literal_(transfer_as_literal) {}
 
 XlaDevice::~XlaDevice() {}
 
@@ -203,6 +215,7 @@ Allocator* XlaDevice::GetAllocator(AllocatorAttributes attr) {
     xla::Backend* backend = client()->mutable_backend();
     xla_allocator_ = XlaDeviceAllocatorState::GetOrCreateXlaDeviceAllocator(
         backend, device_ordinal_);
+    tensor_info_manager_.reset(new XlaTensorInfoManager(xla_allocator_));
   }
   return xla_allocator_;
 }
@@ -220,7 +233,11 @@ Status XlaDevice::FillContextMap(const Graph* graph,
   VLOG(1) << "XlaDevice::FillContextMap";
   device_context_map->resize(graph->num_node_ids());
   TF_ASSIGN_OR_RETURN(se::Stream * stream, GetStream());
-  auto ctx = new XlaDeviceContext(stream);
+  // Call GetAllocator for the side-effect of ensuring the allocator and
+  // XlaTensorInfoManager is created.
+  (void)GetAllocator({});
+  auto ctx = new XlaDeviceContext(stream, tensor_info_manager_.get(),
+                                  transfer_as_literal_);
   for (Node* n : graph->nodes()) {
     VLOG(2) << n->id() << " : " << n->type_string() << " : " << n->name();
     ctx->Ref();
@@ -236,7 +253,8 @@ void XlaDevice::Compute(OpKernel* op_kernel, OpKernelContext* context) {
   // When TraceMe profiling is off (which is the default), the
   // following TraceMe constructor is simply a conditional test of
   // false value. Measurements show that its overhead is negligible.
-  port::Tracing::TraceMe trace_me(op_kernel->name(), op_kernel->type_string());
+  port::Tracing::TraceMe trace_me(op_kernel->name(), op_kernel->type_string(),
+                                  op_kernel->IsExpensive());
   op_kernel->Compute(context);
 }
 
@@ -244,7 +262,8 @@ void XlaDevice::ComputeAsync(AsyncOpKernel* op_kernel, OpKernelContext* context,
                              AsyncOpKernel::DoneCallback done) {
   VLOG(1) << "XlaDevice::ComputeAsync " << op_kernel->name() << ":"
           << op_kernel->type_string();
-  port::Tracing::TraceMe trace_me(op_kernel->name(), op_kernel->type_string());
+  port::Tracing::TraceMe trace_me(op_kernel->name(), op_kernel->type_string(),
+                                  op_kernel->IsExpensive());
   op_kernel->ComputeAsync(context, done);
 }
 
@@ -266,7 +285,8 @@ Status XlaDevice::MakeTensorFromProto(const TensorProto& tensor_proto,
     Tensor copy(GetAllocator(alloc_attrs), parsed.dtype(), parsed.shape());
     Notification n;
     TF_ASSIGN_OR_RETURN(se::Stream * stream, GetStream());
-    XlaTransferManager manager(stream);
+    XlaTransferManager manager(stream, tensor_info_manager_.get(),
+                               transfer_as_literal_);
     manager.CopyCPUTensorToDevice(&parsed, this, &copy,
                                   [&n, &status](const Status& s) {
                                     status = s;
@@ -281,17 +301,23 @@ Status XlaDevice::MakeTensorFromProto(const TensorProto& tensor_proto,
 
 XlaDeviceOpRegistrations* RegisterXlaDeviceKernels(const char* device,
                                                    const char* jit_device) {
+  // Any op assigned to the device that isn't rewritten by the graph rewriter
+  // gets executed by a n XlaCompileOnDemandOp, which compiles it and executes
+  // it just-in-time.
+  kernel_factory::OpKernelRegistrar::Factory factory =
+      [](OpKernelConstruction* context) -> OpKernel* {
+    return new XlaCompileOnDemandOp(context);
+  };
   XlaOpRegistry::RegisterCompilationKernels();
   XlaDeviceOpRegistrations* registrations = new XlaDeviceOpRegistrations;
-  auto dummy_factory = [](OpKernelConstruction* context) -> OpKernel* {
-    return new XlaDeviceDummyOp(context);
-  };
-  for (const KernelDef* jit_def : XlaOpRegistry::DeviceKernels(jit_device)) {
+  for (const KernelDef* jit_def : XlaOpRegistry::DeviceKernels(
+           jit_device,
+           /*include_compilation_only_kernels=*/false)) {
     KernelDef* def = new KernelDef(*jit_def);
     def->set_device_type(device);
     registrations->op_kernel_registrars.emplace_back(
-        new kernel_factory::OpKernelRegistrar(def, "XlaDeviceDummyOp",
-                                              dummy_factory));
+        new kernel_factory::OpKernelRegistrar(def, "XlaCompileOnDemandOp",
+                                              factory));
   }
   return registrations;
 }

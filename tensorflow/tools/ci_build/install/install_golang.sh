@@ -16,7 +16,11 @@
 
 set -ex
 
+<<<<<<< HEAD
 GOLANG_URL="https://storage.googleapis.com/golang/go1.9.linux-amd64.tar.gz"
+=======
+GOLANG_URL="https://storage.googleapis.com/golang/go1.9.2.linux-amd64.tar.gz"
+>>>>>>> 5c098710fd63757f2d1a129d1c5f9d11d517fc22
 
 sudo mkdir -p /usr/local
 wget -q -O - "${GOLANG_URL}" | sudo tar -C /usr/local -xz

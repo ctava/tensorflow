@@ -35,6 +35,11 @@ class FileIoTest(test.TestCase):
   def tearDown(self):
     file_io.delete_recursively(self._base_dir)
 
+  def testEmptyFilename(self):
+    f = file_io.FileIO("", mode="r")
+    with self.assertRaises(errors.NotFoundError):
+      _ = f.read()
+
   def testFileDoesntExist(self):
     file_path = os.path.join(self._base_dir, "temp_file")
     self.assertFalse(file_io.file_exists(file_path))
@@ -480,6 +485,11 @@ class FileIoTest(test.TestCase):
     f.flush()
     self.assertEqual(content, f.read(len(content) + 1))
 
+  def testUTF8StringPathExists(self):
+    file_path = os.path.join(self._base_dir, "UTF8测试_file_exist")
+    file_io.write_string_to_file(file_path, "testing")
+    v = file_io.file_exists(file_path)
+    self.assertEqual(v, True)
 
 if __name__ == "__main__":
   test.main()

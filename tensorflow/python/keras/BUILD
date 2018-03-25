@@ -3,9 +3,17 @@
 
 licenses(["notice"])  # Apache 2.0
 
+exports_files(["LICENSE"])
+
 package(default_visibility = ["//visibility:public"])
 
 load("//tensorflow:tensorflow.bzl", "py_test")
+load("//tensorflow:tensorflow.bzl", "cuda_py_test")
+
+config_setting(
+    name = "empty_condition",
+    values = {"define": "UNUSED=unused"},
+)
 
 py_library(
     name = "keras",
@@ -14,9 +22,12 @@ py_library(
         "_impl/keras/__init__.py",
         "_impl/keras/activations.py",
         "_impl/keras/applications/__init__.py",
+        "_impl/keras/applications/densenet.py",
         "_impl/keras/applications/imagenet_utils.py",
+        "_impl/keras/applications/inception_resnet_v2.py",
         "_impl/keras/applications/inception_v3.py",
         "_impl/keras/applications/mobilenet.py",
+        "_impl/keras/applications/nasnet.py",
         "_impl/keras/applications/resnet50.py",
         "_impl/keras/applications/vgg16.py",
         "_impl/keras/applications/vgg19.py",
@@ -29,12 +40,22 @@ py_library(
         "_impl/keras/datasets/cifar.py",
         "_impl/keras/datasets/cifar10.py",
         "_impl/keras/datasets/cifar100.py",
+        "_impl/keras/datasets/fashion_mnist.py",
         "_impl/keras/datasets/imdb.py",
         "_impl/keras/datasets/mnist.py",
         "_impl/keras/datasets/reuters.py",
         "_impl/keras/engine/__init__.py",
-        "_impl/keras/engine/topology.py",
+        "_impl/keras/engine/base_layer.py",
+        "_impl/keras/engine/input_layer.py",
+        "_impl/keras/engine/network.py",
+        "_impl/keras/engine/saving.py",
+        "_impl/keras/engine/sequential.py",
         "_impl/keras/engine/training.py",
+        "_impl/keras/engine/training_arrays.py",
+        "_impl/keras/engine/training_eager.py",
+        "_impl/keras/engine/training_generator.py",
+        "_impl/keras/engine/training_utils.py",
+        "_impl/keras/estimator.py",
         "_impl/keras/initializers.py",
         "_impl/keras/layers/__init__.py",
         "_impl/keras/layers/advanced_activations.py",
@@ -66,14 +87,18 @@ py_library(
         "_impl/keras/utils/generic_utils.py",
         "_impl/keras/utils/io_utils.py",
         "_impl/keras/utils/layer_utils.py",
+        "_impl/keras/utils/multi_gpu_utils.py",
         "_impl/keras/utils/np_utils.py",
         "_impl/keras/utils/vis_utils.py",
         "_impl/keras/wrappers/__init__.py",
         "_impl/keras/wrappers/scikit_learn.py",
         "activations/__init__.py",
         "applications/__init__.py",
+        "applications/densenet/__init__.py",
+        "applications/inception_resnet_v2/__init__.py",
         "applications/inception_v3/__init__.py",
         "applications/mobilenet/__init__.py",
+        "applications/nasnet/__init__.py",
         "applications/resnet50/__init__.py",
         "applications/vgg16/__init__.py",
         "applications/vgg19/__init__.py",
@@ -85,9 +110,11 @@ py_library(
         "datasets/boston_housing/__init__.py",
         "datasets/cifar10/__init__.py",
         "datasets/cifar100/__init__.py",
+        "datasets/fashion_mnist/__init__.py",
         "datasets/imdb/__init__.py",
         "datasets/mnist/__init__.py",
         "datasets/reuters/__init__.py",
+        "estimator/__init__.py",
         "initializers/__init__.py",
         "layers/__init__.py",
         "losses/__init__.py",
@@ -105,7 +132,11 @@ py_library(
     ],
     srcs_version = "PY2AND3",
     visibility = ["//visibility:public"],
-    deps = [
+    deps = select({
+        ":empty_condition": [],
+        "//conditions:default": [],
+    }) + [
+        "@six_archive//:six",
         "//tensorflow/core:protos_all_py",
         "//tensorflow/python:array_ops",
         "//tensorflow/python:check_ops",
@@ -125,9 +156,11 @@ py_library(
         "//tensorflow/python:layers_base",
         "//tensorflow/python:logging_ops",
         "//tensorflow/python:math_ops",
+        "//tensorflow/python:metrics",
         "//tensorflow/python:nn",
         "//tensorflow/python:platform",
         "//tensorflow/python:random_ops",
+        "//tensorflow/python:session",
         "//tensorflow/python:sparse_ops",
         "//tensorflow/python:sparse_tensor",
         "//tensorflow/python:state_ops",
@@ -139,7 +172,9 @@ py_library(
         "//tensorflow/python:util",
         "//tensorflow/python:variable_scope",
         "//tensorflow/python:variables",
-        "@six_archive//:six",
+        "//tensorflow/python/estimator",
+        "//tensorflow/python/estimator:model_fn",
+        "//tensorflow/python/saved_model",
     ],
 )
 
@@ -237,6 +272,35 @@ py_test(
     size = "small",
     srcs = ["_impl/keras/metrics_test.py"],
     srcs_version = "PY2AND3",
+    tags = [
+        "manual",
+        "no_oss",
+        "notap",
+    ],
+    deps = [
+        ":keras",
+        "//tensorflow/python:client_testlib",
+        "//third_party/py/numpy",
+    ],
+)
+
+py_test(
+    name = "densenet_test",
+    size = "large",
+    srcs = ["_impl/keras/applications/densenet_test.py"],
+    srcs_version = "PY2AND3",
+    deps = [
+        ":keras",
+        "//tensorflow/python:client_testlib",
+        "//third_party/py/numpy",
+    ],
+)
+
+py_test(
+    name = "inception_resnet_v2_test",
+    size = "medium",
+    srcs = ["_impl/keras/applications/inception_resnet_v2_test.py"],
+    srcs_version = "PY2AND3",
     deps = [
         ":keras",
         "//tensorflow/python:client_testlib",
@@ -260,6 +324,18 @@ py_test(
     name = "mobilenet_test",
     size = "medium",
     srcs = ["_impl/keras/applications/mobilenet_test.py"],
+    srcs_version = "PY2AND3",
+    deps = [
+        ":keras",
+        "//tensorflow/python:client_testlib",
+        "//third_party/py/numpy",
+    ],
+)
+
+py_test(
+    name = "nasnet_test",
+    size = "large",
+    srcs = ["_impl/keras/applications/nasnet_test.py"],
     srcs_version = "PY2AND3",
     deps = [
         ":keras",
@@ -340,7 +416,7 @@ py_test(
 
 py_test(
     name = "convolutional_test",
-    size = "medium",
+    size = "large",
     srcs = ["_impl/keras/layers/convolutional_test.py"],
     srcs_version = "PY2AND3",
     tags = [
@@ -368,7 +444,7 @@ py_test(
 
 py_test(
     name = "core_test",
-    size = "small",
+    size = "medium",
     srcs = ["_impl/keras/layers/core_test.py"],
     srcs_version = "PY2AND3",
     deps = [
@@ -429,6 +505,7 @@ py_test(
     size = "small",
     srcs = ["_impl/keras/layers/normalization_test.py"],
     srcs_version = "PY2AND3",
+    tags = ["notsan"],
     deps = [
         ":keras",
         "//tensorflow/python:client_testlib",
@@ -479,6 +556,18 @@ py_test(
 )
 
 py_test(
+    name = "recurrent_test",
+    size = "medium",
+    srcs = ["_impl/keras/layers/recurrent_test.py"],
+    srcs_version = "PY2AND3",
+    deps = [
+        ":keras",
+        "//tensorflow/python:client_testlib",
+        "//third_party/py/numpy",
+    ],
+)
+
+py_test(
     name = "serialization_test",
     size = "small",
     srcs = ["_impl/keras/layers/serialization_test.py"],
@@ -491,7 +580,7 @@ py_test(
 
 py_test(
     name = "wrappers_test",
-    size = "small",
+    size = "medium",
     srcs = ["_impl/keras/layers/wrappers_test.py"],
     srcs_version = "PY2AND3",
     tags = ["notsan"],
@@ -517,12 +606,14 @@ py_test(
 
 py_test(
     name = "data_utils_test",
-    size = "small",
+    size = "medium",
     srcs = ["_impl/keras/utils/data_utils_test.py"],
     srcs_version = "PY2AND3",
     tags = [
+        "no_windows",
         "noasan",  # times out
         "notsan",
+        "optonly",  # times out
     ],
     deps = [
         ":keras",
@@ -552,6 +643,32 @@ py_test(
         ":keras",
         "//tensorflow/python:client_testlib",
         "//third_party/py/numpy",
+    ],
+)
+
+py_test(
+    name = "np_utils_test",
+    size = "small",
+    srcs = ["_impl/keras/utils/np_utils_test.py"],
+    srcs_version = "PY2AND3",
+    deps = [
+        ":keras",
+        "//tensorflow/python:client_testlib",
+        "//third_party/py/numpy",
+    ],
+)
+
+cuda_py_test(
+    name = "multi_gpu_utils_test",
+    srcs = ["_impl/keras/utils/multi_gpu_utils_test.py"],
+    additional_deps = [
+        ":keras",
+        "//third_party/py/numpy",
+        "//tensorflow/python:client_testlib",
+    ],
+    tags = [
+        "guitar",
+        "multi_gpu",
     ],
 )
 
@@ -630,15 +747,66 @@ py_test(
 )
 
 py_test(
+    name = "training_eager_test",
+    size = "medium",
+    srcs = ["_impl/keras/engine/training_eager_test.py"],
+    srcs_version = "PY2AND3",
+    tags = ["notsan"],
+    deps = [
+        ":keras",
+        "//tensorflow/python:client_testlib",
+        "//third_party/py/numpy",
+    ],
+)
+
+py_test(
+    name = "model_subclassing_test",
+    size = "medium",
+    srcs = ["_impl/keras/model_subclassing_test.py"],
+    srcs_version = "PY2AND3",
+    tags = ["notsan"],
+    deps = [
+        ":keras",
+        "//tensorflow/python:client_testlib",
+        "//third_party/py/numpy",
+    ],
+)
+
+py_test(
     name = "topology_test",
     size = "small",
     srcs = ["_impl/keras/engine/topology_test.py"],
     srcs_version = "PY2AND3",
+    tags = [
+        "no-internal-py3",
+    ],
     deps = [
         ":keras",
-        "//tensorflow/python:array_ops",
         "//tensorflow/python:client_testlib",
-        "//tensorflow/python:dtypes",
+        "//third_party/py/numpy",
+    ],
+)
+
+py_test(
+    name = "saving_test",
+    size = "small",
+    srcs = ["_impl/keras/engine/saving_test.py"],
+    srcs_version = "PY2AND3",
+    deps = [
+        ":keras",
+        "//tensorflow/python:client_testlib",
+        "//third_party/py/numpy",
+    ],
+)
+
+py_test(
+    name = "sequential_test",
+    size = "small",
+    srcs = ["_impl/keras/engine/sequential_test.py"],
+    srcs_version = "PY2AND3",
+    deps = [
+        ":keras",
+        "//tensorflow/python:client_testlib",
         "//third_party/py/numpy",
     ],
 )
@@ -648,10 +816,30 @@ py_test(
     size = "small",
     srcs = ["_impl/keras/models_test.py"],
     srcs_version = "PY2AND3",
+    tags = ["notsan"],  # b/67509773
     deps = [
         ":keras",
         "//tensorflow/python:client_testlib",
         "//tensorflow/python:training",
+        "//third_party/py/numpy",
+    ],
+)
+
+py_test(
+    name = "estimator_test",
+    size = "large",
+    srcs = ["_impl/keras/estimator_test.py"],
+    srcs_version = "PY2AND3",
+    tags = ["notsan"],
+    deps = [
+        ":keras",
+        "//tensorflow/python:client_testlib",
+        "//tensorflow/python:dtypes",
+        "//tensorflow/python:framework_ops",
+        "//tensorflow/python:framework_test_lib",
+        "//tensorflow/python:platform",
+        "//tensorflow/python/estimator:numpy_io",
+        "//tensorflow/python/estimator:run_config",
         "//third_party/py/numpy",
     ],
 )

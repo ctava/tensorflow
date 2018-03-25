@@ -18,18 +18,16 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import os
 import numpy as np
 
 from tensorflow.contrib.compiler import jit
-from tensorflow.core.framework import function_pb2
-from tensorflow.core.framework import node_def_pb2
 from tensorflow.core.protobuf import config_pb2
 from tensorflow.python.client import session as session_lib
 from tensorflow.python.framework import constant_op
 from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import function
 from tensorflow.python.framework import ops
-from tensorflow.python.framework import tensor_util
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.ops import gradients_impl
@@ -118,31 +116,13 @@ class JitLaunchTest(test.TestCase):
 
   def testNoOutputs(self):
     with session_lib.Session() as sess:
-      # Build a function with a single Const node, whose output is ignored.
-      fdef = function_pb2.FunctionDef()
-      fdef.signature.name = "KernelWithNoOutputs"
-      node = node_def_pb2.NodeDef()
-      node.op = "Const"
-      node.name = "ignored"
-      node.attr["dtype"].type = dtypes.int32.as_datatype_enum
-      tensor = tensor_util.make_tensor_proto([0], dtype=dtypes.int32, shape=[])
-      node.attr["value"].tensor.CopyFrom(tensor)
-      fdef.node_def.extend([node])
 
       # Check that calling the result as a compiled kernel doesn't crash.
       @function.Defun(compiled=True)
       def KernelWithNoOutputs():
-        return constant_op.constant(100)
+        a = constant_op.constant(100)  # pylint: disable=unused-variable
 
-      # Hack to override the definition.  By accessing .definition, we
-      # force the _DefinedFunction initialized internally. Then, we
-      # replace it's internal FunctionDef proto. We do this hack here
-      # because one typically can't construct KernelWithNoOutputs
-      # function via Defun decorator directly.
-      _ = KernelWithNoOutputs.definition
-      foo = KernelWithNoOutputs
-      foo._definition = fdef
-      call = KernelWithNoOutputs()
+      call = KernelWithNoOutputs()  # pylint: disable=assignment-from-no-return
       sess.run(call, {})
 
   def testAliasing(self):
@@ -455,6 +435,56 @@ class XlaCompilationTest(test.TestCase):
     self.assertFalse(InLabels(labels, "Reciprocal"))
     self.assertFalse(InLabels(labels, "Mul"))
     self.assertTrue(InLabels(labels, "_XlaLaunch"))
+
+
+class ElementWiseFusionTest(test.TestCase):
+
+  # Runs a simple test with the input jit_level and fusion_only flag.
+  def simpleTest(self, arg0, arg1, global_jit_level):
+    config = config_pb2.ConfigProto()
+    config.graph_options.optimizer_options.global_jit_level = global_jit_level
+
+    with session_lib.Session(config=config) as sess:
+      a1 = array_ops.placeholder(dtypes.float32, [2, 2], name="a1")
+      a2 = array_ops.placeholder(dtypes.float32, [2, 2], name="a2")
+      # Two element-wise ops. We need at least two ops since single
+      # element clusters are not passed to XLA in fusion_only mode.
+      a3 = a1 * a2
+      a4 = a3 + a1
+      # A matmul to break XLA clustering.
+      a5 = math_ops.matmul(a4, a1)
+      # Two more element-wise ops.
+      a6 = a5 - a4
+      a7 = a6 + a2
+
+      run_metadata = config_pb2.RunMetadata()
+      output = sess.run(
+          a7, {
+              a1: arg0,
+              a2: arg1
+          },
+          run_metadata=run_metadata,
+          options=config_pb2.RunOptions(
+              trace_level=config_pb2.RunOptions.FULL_TRACE))
+
+      labels = RunMetadataLabels(run_metadata)
+      count = sum("_XlaLaunch(" in x for x in labels)
+
+      return output, count
+
+  def testElementWiseClustering(self):
+    arg0 = np.random.rand(2, 2).astype(np.float32)
+    arg1 = np.random.rand(2, 2).astype(np.float32)
+    os.environ["TF_XLA_FLAGS"] = "--tf_xla_fusion_only=true"
+    tf_op, tf_count = self.simpleTest(arg0, arg1,
+                                      config_pb2.OptimizerOptions.OFF)
+    self.assertEqual(0, tf_count)
+
+    tfef_op, tfef_count = self.simpleTest(arg0, arg1,
+                                          config_pb2.OptimizerOptions.ON_1)
+    self.assertEqual(2, tfef_count)
+
+    self.assertAllClose(tf_op, tfef_op, rtol=1e-1)
 
 
 if __name__ == "__main__":

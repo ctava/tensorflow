@@ -32,6 +32,7 @@ from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import resource_variable_ops
 from tensorflow.python.ops import variables
 from tensorflow.python.platform import tf_logging as logging
+from tensorflow.python.util.tf_export import tf_export
 
 
 def _gather(params, ids, name=None):
@@ -191,12 +192,9 @@ def _embedding_lookup_and_transform(params,
             (flat_ids - extras) // ids_per_partition)
 
         # Emulate a conditional using a boolean indicator tensor
-        is_in_first_extras_partitions = math_ops.cast(p_assignments < extras,
-                                                      flat_ids.dtype)
-        new_ids = (is_in_first_extras_partitions * (flat_ids %
-                                                    (ids_per_partition + 1)) +
-                   (1 - is_in_first_extras_partitions) *
-                   ((flat_ids - extras) % ids_per_partition))
+        new_ids = array_ops.where(p_assignments < extras,
+                                  flat_ids % (ids_per_partition + 1),
+                                  (flat_ids - extras) % ids_per_partition)
       else:
         raise ValueError("Unrecognized partition strategy: " +
                          partition_strategy)
@@ -222,7 +220,7 @@ def _embedding_lookup_and_transform(params,
             result = transform_fn(_clip(result, pids, max_norm))
         partitioned_result.append(result)
       # Stitch these back together
-      ret = data_flow_ops.dynamic_stitch(
+      ret = data_flow_ops.parallel_dynamic_stitch(
           pindices, partitioned_result, name=name)
 
       # Determine the static element shape.
@@ -260,6 +258,7 @@ def _embedding_lookup_and_transform(params,
       return ret
 
 
+@tf_export("nn.embedding_lookup")
 def embedding_lookup(
     params,
     ids,
@@ -328,6 +327,7 @@ def embedding_lookup(
       transform_fn=None)
 
 
+@tf_export("nn.embedding_lookup_sparse")
 def embedding_lookup_sparse(params,
                             sp_ids,
                             sp_weights,
@@ -396,8 +396,8 @@ def embedding_lookup_sparse(params,
     with `combiner`="mean", then the output will be a 3x20 matrix where
 
       output[0, :] = (params[1, :] * 2.0 + params[3, :] * 0.5) / (2.0 + 0.5)
-      output[1, :] = params[0, :] * 1.0
-      output[2, :] = params[1, :] * 3.0
+      output[1, :] = (params[0, :] * 1.0) / 1.0
+      output[2, :] = (params[1, :] * 3.0) / 3.0
 
   Raises:
     TypeError: If sp_ids is not a SparseTensor, or if sp_weights is neither
